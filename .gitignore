@@ -1,0 +1,38 @@
+# ── Credentials (per deploy.conf) ─────────────────────────────
+# Never commit real config — use config.example.php as the template
+config.php
+config.masked.php
+public/.htaccess
+public/.htaccess.masked
+
+# ── OS junk ───────────────────────────────────────────────────
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+desktop.ini
+
+# ── Logs ──────────────────────────────────────────────────────
+*.log
+/logs/
+
+# ── Dependencies ──────────────────────────────────────────────
+/vendor/
+
+# ── Schema files ──────────────────────────────────────────────
+modules/auth/schema.sql
+modules/settings/schema.sql
+
+# ── Auth module vendored dependency ───────────────────────────
+modules/auth/phpmailer/
+
+# ── Other ─────────────────────────────────────────────────────
+abide-collect.sh
+abide-audit-handoff.md
+files.zip
+*.zip
+link-to-github.sh
+
+# ── Setup wizard ──────────────────────────────────────────────
+# Uncomment after first run to prevent wizard exposure in production
+# /setup/
