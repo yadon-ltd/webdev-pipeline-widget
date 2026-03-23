@@ -29,8 +29,6 @@ modules/auth/phpmailer/
 # ── Other ─────────────────────────────────────────────────────
 abide-collect.sh
 abide-audit-handoff.md
-files.zip
-*.zip
 link-to-github.sh
 
 # ── Setup wizard ──────────────────────────────────────────────
