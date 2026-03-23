@@ -1,35 +1,126 @@
-# Deploy Pipeline — Scope, Purpose, and Process
+# Deploy Pipeline
 
-## Purpose
-
-The deploy pipeline manages the flow of code between an AI-assisted development workflow and four deployment targets. Its primary responsibility is ensuring that environment-specific secrets (database credentials, SMTP passwords, server paths) never leave the local machine while allowing structural code changes to flow freely between all targets.
-
-## Problem it solves
-
-AI-assisted development requires sharing project files with a language model. Those files may contain credentials, server paths, and other environment-specific values that must not be exposed. Manually sanitizing files before sharing and re-injecting secrets after receiving changes is error-prone and tedious. This pipeline automates the entire cycle.
-
-## Scope
-
-The pipeline handles one input and four outputs:
-
-**Input:** A zip file from Claude containing modified project files with masked credentials and placeholder paths. Files use `__` delimiters in place of directory separators (e.g., `core__footer.php` represents `core/footer.php`). Root-level files use their bare name with no delimiter (e.g., `index.php` stays `index.php`).
-
-**Outputs:**
-
-1. **Local repo** — The developer's working copy. Contains real credentials and server paths. This is the source of truth for all environment-specific values.
-
-2. **Web server** — The production (or staging) deployment. Receives real credentials and server paths via rsync (websync push). Only changed files are transferred from the local repo — this is a copy operation, not a mirror. Files deleted locally are not automatically removed on the server.
-
-3. **GitHub** — The public (or private) repository. Receives `.example` files (developer-maintained onboarding templates) but not real credentials or `.masked` files. Real secret-bearing files and their `.masked` counterparts are listed in `.gitignore`. Pushed automatically by wd-gitsync with a credential safety gate.
-
-4. **Snapshot** — A timestamped revision point with two sub-outputs:
-   - **Backup zip** — Full project tree with real values. Restorable.
-   - **for-claude/ directory** — Flat files with `__` delimiters (root-level files keep bare names), sanitized. Excludes real secret files. Collects `.masked` and `.example` versions. Ready for Claude project upload.
+Automates the flow of code between an AI-assisted development workflow and four deployment targets — local repo, web server, GitHub, and snapshot — while ensuring environment-specific secrets never leave the local machine.
 
 
-## Three-tier file model
+## Command usage
 
-Secret-bearing files exist in three forms. Each form has a different audience and a different routing rule:
+All tools default to **dry run**. Pass `-d FALSE` to execute for real.
+
+### wd-deploy — full pipeline
+
+```
+wd-deploy <profile>              # Dry-run the full pipeline
+wd-deploy <profile> -d FALSE     # Execute all stages for real
+wd-deploy <profile> --no-git     # Skip the git sync stage
+wd-deploy list                   # List available websync profiles
+```
+
+### wd-websync — rsync push/pull
+
+```
+wd-websync push <profile>                  # Dry-run push to server
+wd-websync push <profile> -d FALSE         # Push to server
+wd-websync pull <profile> -d FALSE         # Pull from server
+wd-websync push <profile> --delete         # Push + remove server-only files
+wd-websync push <local> <host:remote>      # One-off push (no profile)
+wd-websync config <profile>                # Create or edit a profile
+wd-websync show <profile>                  # View profile settings
+wd-websync delete <profile>                # Delete a profile
+wd-websync list                            # List saved profiles
+```
+
+### wd-gitsync — git commit + push with safety gate
+
+```
+wd-gitsync <profile>                       # Dry-run git sync
+wd-gitsync <profile> -d FALSE              # Commit and push
+wd-gitsync <profile> -d FALSE -m "msg"     # Commit with custom message
+wd-gitsync /path/to/project                # Use direct path
+wd-gitsync list                            # List websync profiles
+```
+
+### wd-snapshot — backup + Claude-ready output
+
+```
+wd-snapshot <profile>                      # Dry-run snapshot
+wd-snapshot <profile> -d FALSE             # Execute snapshot
+wd-snapshot /path/to/project               # Use direct path
+wd-snapshot list                           # List websync profiles
+```
+
+### Installation
+
+```bash
+chmod +x webdev-deploy-pipeline-installation.sh
+./webdev-deploy-pipeline-installation.sh
+```
+
+Installs `wd-lib.sh`, `wd-deploy`, `wd-snapshot`, `wd-websync`, and `wd-gitsync` to `/usr/local/bin/`.
+
+
+### Prerequisites
+
+**Local machine:**
+- `rsync`, `git`, `unzip`, `zip` installed and in PATH
+- `~/.ssh/config` entry for the web server (hostname, user, key path)
+- `git config` set with `user.name` and `user.email`
+
+**Web server (push target):**
+- SSH key authentication configured (password auth not supported by the pipeline)
+- `rsync` installed on the remote host
+- Target directory created (or let wd-websync create it on first push)
+
+**GitHub (git sync target):**
+- SSH key added to your GitHub account (Settings → SSH and GPG keys)
+- Remote set to SSH format: `git@github.com:user/repo.git` (not `https://`)
+- Verify with: `ssh -T git@github.com`
+
+
+## Pipeline flow
+
+```mermaid
+flowchart TB
+    subgraph INPUT
+        zip["Claude zip<br><i>flat files, masked credentials</i>"]
+    end
+
+    subgraph PIPELINE["wd-deploy"]
+        direction TB
+        s1["1. Extract<br><i>unzip to staging</i>"]
+        s2["2. Distribute<br><i>unflatten __ files into project tree</i>"]
+        s3["3. Env patch<br><i>generate .masked, restore real values</i>"]
+        s4["4. Push<br><i>rsync changed files to server</i>"]
+        s5["5. Git sync<br><i>commit + push with safety gate</i>"]
+        s6["6. Snapshot<br><i>backup zip + for-claude/ output</i>"]
+        s7["7. Cleanup<br><i>delete source zip</i>"]
+        s1 --> s2 --> s3 --> s4 --> s5 --> s6 --> s7
+    end
+
+    subgraph OUTPUTS
+        local["Local repo<br><i>real credentials</i>"]
+        server["Web server<br><i>real credentials</i>"]
+        github["GitHub<br><i>.example files only</i>"]
+        snap_zip["Backup zip<br><i>full tree, restorable</i>"]
+        claude["for-claude/<br><i>flat files, sanitized</i>"]
+    end
+
+    zip --> s1
+    s3 --> local
+    s4 --> server
+    s5 --> github
+    s6 --> snap_zip
+    s6 --> claude
+
+    style INPUT fill:transparent,stroke:#888
+    style PIPELINE fill:transparent,stroke:#888
+    style OUTPUTS fill:transparent,stroke:#888
+```
+
+
+## File routing
+
+Secret-bearing files exist in three forms. Each has a different audience and routing rule:
 
 | File | Maintained by | Server | GitHub | Claude | Snapshot |
 |------|--------------|--------|--------|--------|----------|
@@ -37,30 +128,29 @@ Secret-bearing files exist in three forms. Each form has a different audience an
 | `config.masked.php` | Pipeline (auto-generated) | ✓ synced | ✗ .gitignore | ✓ collected | ✓ included |
 | `config.example.php` | Developer / Claude AI | ✓ synced | ✓ tracked | ✓ collected | ✓ included |
 
-- **Real file** — Contains actual credentials. Lives in the local repo and on the server. Never reaches GitHub or Claude.
-- **Masked file** — Auto-generated by Stage 3 from the Claude zip before patching. Contains the full config structure with `********` sentinel placeholders. Claude uses this to understand the layout without seeing real values. Gitignored because it serves no purpose outside the AI workflow.
-- **Example file** — A hand-crafted onboarding template maintained by the developer (or by Claude the AI during development). Contains descriptive comments and safe defaults. Tracked in GitHub so anyone cloning the repo can copy it and fill in their values.
+**Real file** — Contains actual credentials. Lives in the local repo and on the server. Never reaches GitHub or Claude.
+
+**Masked file** — Auto-generated by Stage 3 from the Claude zip before patching. Contains the full config structure with `********` sentinel placeholders. Claude uses this to understand the layout without seeing real values. Gitignored.
+
+**Example file** — A hand-crafted onboarding template maintained by the developer (or Claude AI). Contains descriptive comments and safe defaults. Tracked in GitHub so anyone cloning the repo can copy it and fill in their values.
+
+| File type | Local repo | Web server | GitHub | Snapshot zip | for-claude/ |
+|-----------|-----------|------------|--------|-------------|-------------|
+| Secret files (per `deploy.conf`) | Real credentials | Real credentials | `.gitignore` | Real (restorable) | Excluded |
+| `.masked` files (auto-generated) | Masked (auto-updated) | Synced | `.gitignore` | Included | Collected |
+| `.example` files (developer-maintained) | Template | Synced | Tracked | Included | Collected |
+| All other files | As-is from Claude | Synced from local | Tracked | Included | Collected |
 
 
 ## deploy.conf — the project contract
 
-Every project declares its secret-bearing files in a single config file at the project root: `deploy.conf`. This is the only file that contains project-specific knowledge. The pipeline tools themselves are entirely project-agnostic — they read `deploy.conf` to determine what to save, patch, and exclude.
+Every project declares its secret-bearing files in a single config file at the project root: `deploy.conf`. This is the only file that contains project-specific knowledge. The pipeline tools are entirely project-agnostic — they read `deploy.conf` to determine what to save, patch, and exclude.
 
-The tools locate the config at `$PROJECT_DIR/deploy.conf`, where `$PROJECT_DIR` is resolved from the wd-websync profile's `LOCAL_DIR`.
+If `deploy.conf` doesn't exist when wd-deploy runs, the pipeline offers to create a commented template with syntax reference and common examples.
 
 **Format:**
 
 ```
-# deploy.conf — environment-specific file declarations
-#
-# Declares which files contain secrets. Used by:
-#   - deploy Stage 3 (save, patch, .masked generation)
-#   - gitsync (credential safety gate — checks both real and .masked)
-#   - snapshot (Claude excludes real files, collects .masked)
-#
-# The file entries here AND their .masked counterparts should
-# both be added to .gitignore — this is a one-time setup per project.
-#
 # SYNTAX
 #   file <path>             Declares a secret-bearing file (relative to project root)
 #   patch <grep_pattern>    A line to capture and restore (belongs to preceding file)
@@ -87,23 +177,10 @@ patch auto_prepend_file
 | Consumer | What it reads | What it does with it |
 |----------|--------------|---------------------|
 | wd-deploy Stage 3 | `file` entries + `patch` patterns | Saves real values before overwrite, copies masked → `.masked`, patches real values back |
-| wd-gitsync | `file` entries | Verifies every declared file AND its `.masked` counterpart is covered by `.gitignore` before allowing a push |
-| wd-snapshot | `file` entries | Excludes listed files from for-claude/ output (`.masked` and `.example` files are collected normally) |
+| wd-gitsync | `file` entries | Verifies every declared file AND its `.masked` counterpart is in `.gitignore` before pushing |
+| wd-snapshot | `file` entries | Excludes listed files from for-claude/ output |
 
-The developer adds the `file` entries AND their `.masked` counterparts to `.gitignore` manually when setting up the project. This is a one-time step — `deploy.conf` serves as the reference for what belongs there. wd-gitsync enforces alignment on every push.
-
-**.gitignore setup for a typical project:**
-```
-# Real credentials (per deploy.conf)
-config.php
-public/.htaccess
-
-# Masked files (auto-generated by deploy Stage 3)
-config.masked.php
-public/.htaccess.masked
-```
-
-**Swapping projects** means swapping the config. The same `wd-deploy`, `wd-gitsync`, `wd-snapshot`, and `wd-websync` tools work for any project:
+**Swapping projects** means swapping the config. Same tools work for any project:
 
 ```
 # PHP project                    # Node project
@@ -116,30 +193,23 @@ patch auto_prepend_file
 
 **What deploy.conf is not:** It is not secret. It contains grep patterns, not values. It documents which files need environment-specific setup — useful for anyone cloning the repo. It belongs in version control.
 
-**.masked naming convention:** Auto-derived from the `file` entries. For normal files, `.masked` is inserted before the extension (`config.php` → `config.masked.php`). For dotfiles, `.masked` is appended (`.htaccess` → `.htaccess.masked`).
+**.masked naming convention:** Auto-derived from `file` entries. Normal files: `.masked` inserted before the extension (`config.php` → `config.masked.php`). Dotfiles: `.masked` appended (`.htaccess` → `.htaccess.masked`).
 
-**Template creation:** If `deploy.conf` does not exist when wd-deploy runs, the pipeline offers to create a commented template with syntax reference and common examples. The developer fills in the project-specific declarations before the next deploy.
+**.gitignore setup** — add the `file` entries AND their `.masked` counterparts:
+```
+# Real credentials (per deploy.conf)
+config.php
+public/.htaccess
 
+# Masked files (auto-generated by deploy Stage 3)
+config.masked.php
+public/.htaccess.masked
+```
 
-## Shared library: wd-lib.sh
-
-All pipeline tools source `wd-lib.sh` for shared functions and constants. This avoids duplicating logic across scripts and ensures consistent behavior when the deploy.conf format or naming conventions change.
-
-**Shared functions:**
-
-| Function | Used by | Purpose |
-|----------|---------|---------|
-| `parse_deploy_conf` | wd-deploy | Full parse: file entries + patch patterns |
-| `parse_deploy_conf_files` | wd-gitsync, wd-snapshot | File entries only (no patterns) |
-| `derive_masked_name` | wd-deploy, wd-gitsync | Compute `.masked` filename from a path |
-| `cmd_list_profiles` | wd-deploy, wd-gitsync, wd-snapshot | List available websync profiles |
-| `load_websync_profile` | wd-gitsync, wd-snapshot | Read a websync `.conf` file |
-| `create_deploy_conf_template` | wd-deploy | Scaffold a new deploy.conf |
-
-`wd-lib.sh` is installed alongside the tools in `/usr/local/bin/` and is located via `dirname "$0"`.
+wd-gitsync enforces this alignment on every push.
 
 
-## Pipeline stages
+## Pipeline stages in detail
 
 ### Stage 1: Extract
 
@@ -147,78 +217,43 @@ Unzips the Claude-delivered file into a temporary staging area. If the zip conta
 
 ### Stage 2: Distribute
 
-This stage has two phases that happen in strict order.
+**Phase A — Capture.** Before any files are overwritten, the pipeline copies the current versions of every file listed in `deploy.conf` from the local repo into a temp directory. These copies preserve the real environment-specific values for use in Stage 3. On a first deploy where these files don't exist yet, the capture is skipped.
 
-**Phase A: Capture.** Before any files are overwritten, the pipeline copies the current versions of every file listed in `deploy.conf` from the local repo into a temp directory. These copies preserve the real environment-specific values for use in Stage 3. On a first deploy where these files don't exist yet, the capture is skipped — Stage 3 will skip patching for those files.
-
-**Phase B: Overwrite.** Each file from the zip is copied into the local project tree, overwriting the existing file. Files with `__` in their name are unflattened into subdirectories (e.g., `core__footer.php` → `core/footer.php`). Files without `__` are placed at the project root (e.g., `index.php` → project root). A rollback manifest is maintained so that any failure triggers automatic restoration of every overwritten file.
+**Phase B — Overwrite.** Each file from the zip is copied into the local project tree. Files with `__` in their name are unflattened into subdirectories (`core__footer.php` → `core/footer.php`). Files without `__` are placed at the project root (`index.php` → project root). A rollback manifest tracks every overwritten file.
 
 ### Stage 3: Env patch
 
-Two operations happen in order, driven entirely by `deploy.conf`:
+**A — Copy sanitized → .masked.** Before patching, the still-masked versions of files listed in `deploy.conf` are copied to their `.masked` counterparts. These contain the full config structure with sentinel placeholders — what Claude needs to understand the layout without seeing real credentials. Tracked in the rollback manifest.
 
-**A. Copy masked versions to `.masked` files.** Before any patching, the still-masked versions of the files listed in `deploy.conf` are copied to their `.masked` counterparts. These copies contain the full config structure with sentinel placeholders — exactly what Claude needs to understand the layout without seeing real credentials. The `.masked` files are tracked in the rollback manifest so they are restored (or removed) on failure like any other file.
+**B — Patch real values.** For each `file` entry in `deploy.conf`, the pipeline walks its `patch` patterns. Each pattern is a fixed-string grep match used twice: against the post-distribute file to find the target line number, and against the saved pre-distribute copy to extract the full replacement line. Awk swaps by line number — whole-line replacement, no regex on values, no escaping required. Handles quoted strings, bare integers, paths with special characters — anything.
 
-**B. Patch real values into the working copies.** For each `file` entry in `deploy.conf`, the pipeline walks its `patch` patterns. Each pattern is a fixed-string grep match used twice: first against the post-distribute file to find the target line number, then against the saved pre-distribute copy to extract the full replacement line. An awk command swaps the target line by number — whole-line replacement with no regex on values, no escaping required. Handles quoted strings, bare integers, constant references, paths with special characters — anything.
-
-`.example` files are not touched by Stage 3 — they are maintained by the developer (or by Claude the AI during development) and exist as regular project files.
-
-On a first deploy where no pre-distribute copy exists, patching is skipped for that file. The developer populates real values manually after the initial deploy.
-
-**Masked fields** are whatever the project declares in `deploy.conf`. For a PHP project using Abide, those typically include:
-
-| Constant | Placeholder | Description |
-|----------|-------------|-------------|
-| `SITE_URL` | `https://example.com` | Production domain |
-| `DB_HOST` | `localhost` | Database host |
-| `DB_NAME` | `''` | Database name |
-| `DB_USER` | `''` | Database username |
-| `DB_PASS` | `'********'` | Database password |
-| `SMTP_HOST` | `''` | Mail server hostname |
-| `SMTP_USER` | `''` | SMTP username |
-| `SMTP_PASS` | `'********'` | SMTP password |
-| `SMTP_PORT` | `465` | SMTP port |
-| `SMTP_FROM` | `''` | Sender email address |
-| `SMTP_NAME` | `SITE_NAME` | Sender display name |
-
-| Directive | Placeholder | Description |
-|-----------|-------------|-------------|
-| `auto_prepend_file` | `/home/YOUR_USERNAME/YOUR_SITE/core/init.php` | Absolute server path to bootstrap |
+`.example` files are not touched — they are maintained by the developer (or Claude AI) and exist as regular project files.
 
 ### Stage 4: Push
 
-Pushes changed local files to the web server via rsync. Uses the wd-websync profile for host, path, and exclude configuration. Only modified files are transferred — this is a copy operation, not a mirror. Files deleted locally are not removed on the server. To explicitly remove remote-only files, use `wd-websync push <profile> --delete` as a separate step.
+Pushes changed local files to the web server via rsync. Only modified files are transferred — this is a copy operation, not a mirror. Files deleted locally are not removed on the server. To explicitly clean up server-only files, use `wd-websync push <profile> --delete` as a separate step.
 
 ### Stage 5: Git sync
 
-Commits and pushes the local repo to its git remote via wd-gitsync. This stage is automatic when three conditions are met: the project has a `.git` directory, `wd-gitsync` is installed and in PATH, and the `--no-git` flag was not passed to wd-deploy. Otherwise it is skipped silently.
+Commits and pushes to the git remote. Automatic when the project has `.git`, `wd-gitsync` is installed, and `--no-git` was not passed. Skipped silently otherwise.
 
-**Credential safety gate.** Before allowing any push, wd-gitsync cross-references every `file` entry in `deploy.conf` — plus each file's `.masked` counterpart — against `.gitignore`. If any secret-bearing file or masked file is not covered (either by an exact match or by a broader pattern that `git check-ignore` confirms), the push is blocked. This is the primary guardrail against accidental credential exposure to GitHub.
+**Credential safety gate:** Before pushing, wd-gitsync verifies every `file` entry in `deploy.conf` — plus each `.masked` counterpart — is in `.gitignore`. Blocks on mismatch.
 
-**Non-fatal failure.** Unlike other stages, git sync failure does not trigger a full pipeline rollback. The server push has already succeeded and the local files are correct. On failure, the developer chooses: continue to snapshot (skip git for now) or stop here and fix the issue manually.
+**Non-fatal failure:** Git sync failure does not trigger a full pipeline rollback. The server push already succeeded. The developer chooses: continue to snapshot or stop and fix.
 
-**Commit message.** When called from wd-deploy, wd-gitsync auto-generates a commit message from the staged diff (e.g., `Deploy: 3 modified, 1 added`). When run standalone, it prompts for confirmation or a custom message.
+**Commit message:** Auto-generated from the staged diff (e.g., `Deploy: 3 modified, 1 added`). When run standalone, prompts for confirmation or a custom message.
 
 ### Stage 6: Snapshot
 
-Creates a revision point with two outputs:
+Creates two outputs:
 
-- **Backup zip** — Full project tree (real values included) with a snapshot log containing directory tree, file details, and MD5 checksums. This is the rollback artifact.
-- **for-claude/ directory** — Flat files for Claude project upload. Reads `deploy.conf` to determine which files to exclude (these contain real credentials). Root-level files keep their bare names; subdirectory files use `__` delimiters. `.masked` and `.example` files are collected normally alongside everything else.
+**Backup zip** — Full project tree (real values included) with a snapshot log containing directory tree, file details, and MD5 checksums. This is the rollback artifact.
+
+**for-claude/ directory** — Flat files for Claude project upload. Secret files (per `deploy.conf`) are excluded. Root-level files keep bare names; subdirectory files use `__` delimiters. `.masked` and `.example` files are collected normally.
 
 ### Stage 7: Cleanup
 
-Deletes the source zip that was input to the pipeline. All other artifacts (local repo, server state, git history, snapshot) are preserved.
-
-
-## File handling matrix
-
-| File | Local repo | Web server | GitHub | Snapshot zip | for-claude/ |
-|------|-----------|------------|--------|-------------|-------------|
-| Secret files (per `deploy.conf`) | Real credentials | Real credentials | `.gitignore` | Real (restorable) | Excluded |
-| `.masked` files (auto-generated) | Masked (auto-updated) | Synced | `.gitignore` | Included | Collected |
-| `.example` files (developer-maintained) | Template | Synced | Tracked | Included | Collected |
-| All other files | As-is from Claude | Synced from local | Tracked | Included | Collected |
+Deletes the source zip. All other artifacts are preserved.
 
 
 ## Rollback
@@ -234,39 +269,41 @@ If any stage fails, the pipeline automatically:
 **Exception:** Git sync (Stage 5) failure is non-fatal. The developer chooses whether to continue or stop. Git commits can be amended or reverted independently.
 
 
-## Tools
+## Shared library: wd-lib.sh
 
-| Tool | Purpose |
-|------|---------|
-| `wd-lib.sh` | Shared functions and constants sourced by all tools |
-| `wd-deploy` | Full pipeline: extract → distribute → patch → push → git sync → snapshot → cleanup |
-| `wd-websync` | rsync wrapper with named profiles for push/pull between local and server |
-| `wd-gitsync` | git commit and push with credential safety gate (standalone or called from wd-deploy) |
-| `wd-snapshot` | Creates backup zip + for-claude/ flat files from the current project state |
+All pipeline tools source `wd-lib.sh` for shared functions and constants. Installed alongside the tools in `/usr/local/bin/` and located via `dirname "$0"`.
+
+| Function | Used by | Purpose |
+|----------|---------|---------|
+| `parse_deploy_conf` | wd-deploy | Full parse: file entries + patch patterns |
+| `parse_deploy_conf_files` | wd-gitsync, wd-snapshot | File entries only (no patterns) |
+| `derive_masked_name` | wd-deploy, wd-gitsync | Compute `.masked` filename from a path |
+| `cmd_list_profiles` | wd-deploy, wd-gitsync, wd-snapshot | List available websync profiles |
+| `load_websync_profile` | wd-gitsync, wd-snapshot | Read a websync `.conf` file |
+| `create_deploy_conf_template` | wd-deploy | Scaffold a new deploy.conf |
 
 
 ## First deploy
 
-On the very first deploy to a new environment, the local repo won't have `config.php`, `.htaccess`, or whatever files `deploy.conf` declares. The pipeline handles this gracefully:
+On the very first deploy, the local repo won't have `config.php`, `.htaccess`, or whatever files `deploy.conf` declares. The pipeline handles this gracefully:
 
-- If `deploy.conf` doesn't exist, the pipeline offers to create a commented template with syntax reference and common examples
+- If `deploy.conf` doesn't exist, offers to create a commented template
 - Stage 2 distributes all files from the zip (including root-level files)
 - Pre-distribute capture skips files that don't exist yet
 - Stage 3 creates `.masked` copies but skips patching (no saved values to restore)
-- Stage 5 (git sync) verifies .gitignore alignment even on first deploy
-- A preflight warning lists any files declared in `deploy.conf` that aren't found in the project
-- The developer edits the working copies manually to insert real credentials
+- Stage 5 verifies `.gitignore` alignment even on first deploy
+- A preflight warning lists any declared files not found in the project
+- The developer populates real credentials manually after the initial deploy
 - Subsequent deploys capture and restore values automatically
 
 
 ## Conventions
 
-- **deploy.conf:** One file in the project root declares all secret-bearing files and their patchable lines. Tools locate it at `$PROJECT_DIR/deploy.conf`. If missing, wd-deploy offers to create a template.
-- **Placeholder sentinel:** `********` for credential values
-- **Placeholder sentinel:** `YOUR_USERNAME` and `YOUR_SITE` for server paths
-- **Flat file naming:** Directory separators become `__` (e.g., `public/pages/login.php` → `public__pages__login.php`). Root-level files keep their bare name with no `__` prefix (e.g., `index.php` stays `index.php`).
+- **deploy.conf:** One file in the project root declares all secret-bearing files and their patchable lines. If missing, wd-deploy offers to create a template.
+- **Placeholder sentinel:** `********` for credential values; `YOUR_USERNAME` and `YOUR_SITE` for server paths.
+- **Flat file naming:** Directory separators become `__` (e.g., `public/pages/login.php` → `public__pages__login.php`). Root-level files keep their bare name (e.g., `index.php` stays `index.php`).
 - **Dry run by default:** All tools default to dry run. Pass `-d FALSE` to execute.
-- **Profile-based config:** Environment-specific connection settings (host, paths, excludes) live in `~/.websync/*.conf`
+- **Profile-based config:** Environment-specific connection settings live in `~/.websync/*.conf`.
 - **Shared library:** All tools source `wd-lib.sh` from the same directory as the tool binary.
 
 
