@@ -79,43 +79,7 @@ Installs `wd-lib.sh`, `wd-deploy`, `wd-snapshot`, `wd-websync`, and `wd-gitsync`
 
 ## Pipeline flow
 
-```mermaid
-flowchart TB
-    subgraph INPUT
-        zip["Claude zip<br><i>flat files, masked credentials</i>"]
-    end
-
-    subgraph PIPELINE["wd-deploy"]
-        direction TB
-        s1["1. Extract<br><i>unzip to staging</i>"]
-        s2["2. Distribute<br><i>unflatten __ files into project tree</i>"]
-        s3["3. Env patch<br><i>generate .masked, restore real values</i>"]
-        s4["4. Push<br><i>rsync changed files to server</i>"]
-        s5["5. Git sync<br><i>commit + push with safety gate</i>"]
-        s6["6. Snapshot<br><i>backup zip + for-claude/ output</i>"]
-        s7["7. Cleanup<br><i>delete source zip</i>"]
-        s1 --> s2 --> s3 --> s4 --> s5 --> s6 --> s7
-    end
-
-    subgraph OUTPUTS
-        local["Local repo<br><i>real credentials</i>"]
-        server["Web server<br><i>real credentials</i>"]
-        github["GitHub<br><i>.example files only</i>"]
-        snap_zip["Backup zip<br><i>full tree, restorable</i>"]
-        claude["for-claude/<br><i>flat files, sanitized</i>"]
-    end
-
-    zip --> s1
-    s3 --> local
-    s4 --> server
-    s5 --> github
-    s6 --> snap_zip
-    s6 --> claude
-
-    style INPUT fill:transparent,stroke:#888
-    style PIPELINE fill:transparent,stroke:#888
-    style OUTPUTS fill:transparent,stroke:#888
-```
+![Deploy pipeline flow](pipeline-flow.svg)
 
 
 ## File routing
